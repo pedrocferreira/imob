@@ -1,0 +1,64 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Ambiente virtual
+venv/
+env/
+ENV/
+
+# Arquivos de configuração
+.env
+*.env
+
+# Banco de dados
+*.db
+*.sqlite3
+*.sqlite
+*.sql
+db/
+
+# Logs
+*.log
+logs/
+geckodriver.log
+
+# Arquivos temporários
+.DS_Store
+.tmp/
+temp/
+.cache/
+.coverage
+coverage.xml
+*.cover
+
+# Diretórios de dados (opcionais, pode remover se quiser versionar os dados)
+#data/
+#data/images/
+#data/images_new/
+#data/imagens_simples/
+
+# Arquivos temporários de IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+*~ 
