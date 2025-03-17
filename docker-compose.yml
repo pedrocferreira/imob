@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  assistente-imobiliario:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/app/data
+      - ./rag/.env:/app/rag/.env
+    restart: unless-stopped
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8080 
