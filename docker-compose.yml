@@ -6,7 +6,7 @@ services:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "8081:8080"
+      - "80:8080"
     volumes:
       - ./data:/app/data
       - ./rag/.env:/app/rag/.env
