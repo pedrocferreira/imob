@@ -2,7 +2,9 @@ import os
 import json
 import re
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Union
+import uuid
+from datetime import datetime
 
 from dotenv import load_dotenv
 from langchain.prompts import PromptTemplate
@@ -15,6 +17,241 @@ load_dotenv(Path(__file__).parent / '.env')
 DOCUMENTOS_JSON = os.path.join(os.path.dirname(os.getenv("CHROMA_PERSIST_DIRECTORY", "./db")), "documentos.json")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
+# Classes para gerenciamento de memória e conversas
+class MemoriaCliente:
+    """Gerencia informações do cliente."""
+    
+    def __init__(self):
+        self.nome = None
+        self.genero = None
+        self.preferencias = {
+            "preco_maximo": None,
+            "dormitorios": None,
+            "bairro": None,
+            "tipo_imovel": None,
+            "features": []
+        }
+        self.ultima_interacao = None
+        self.interacoes_totais = 0
+        self.imoveis_visitados = []
+        self.feedback_imoveis = {}
+    
+    def atualizar_nome(self, nome: str):
+        """Atualiza o nome do cliente."""
+        self.nome = nome
+    
+    def atualizar_preferencia(self, chave: str, valor: Any):
+        """Atualiza uma preferência específica do cliente."""
+        if chave in self.preferencias:
+            self.preferencias[chave] = valor
+    
+    def adicionar_feature(self, feature: str):
+        """Adiciona uma característica desejada às preferências."""
+        if feature and feature not in self.preferencias["features"]:
+            self.preferencias["features"].append(feature)
+    
+    def registrar_interacao(self):
+        """Registra uma nova interação com o cliente."""
+        self.ultima_interacao = datetime.now()
+        self.interacoes_totais += 1
+    
+    def registrar_visita_imovel(self, codigo_imovel: str):
+        """Registra um imóvel visitado pelo cliente."""
+        if codigo_imovel and codigo_imovel not in self.imoveis_visitados:
+            self.imoveis_visitados.append(codigo_imovel)
+    
+    def registrar_feedback(self, codigo_imovel: str, feedback: str):
+        """Registra feedback do cliente sobre um imóvel."""
+        if codigo_imovel:
+            self.feedback_imoveis[codigo_imovel] = feedback
+    
+    def resumo(self) -> str:
+        """Retorna um resumo das informações do cliente."""
+        resumo = ""
+        if self.nome:
+            resumo += f"Nome: {self.nome}\n"
+        
+        resumo += "Preferências:\n"
+        for chave, valor in self.preferencias.items():
+            if valor:
+                if chave == "features" and valor:
+                    resumo += f"- Características desejadas: {', '.join(valor)}\n"
+                else:
+                    resumo += f"- {chave.replace('_', ' ').title()}: {valor}\n"
+        
+        if self.imoveis_visitados:
+            resumo += f"Imóveis visitados: {', '.join(self.imoveis_visitados)}\n"
+            
+        return resumo
+
+class HistoricoConversa:
+    """Gerencia o histórico de conversas."""
+    
+    def __init__(self, max_mensagens: int = 10):
+        self.mensagens = []
+        self.max_mensagens = max_mensagens
+    
+    def adicionar_mensagem(self, remetente: str, conteudo: str):
+        """Adiciona uma mensagem ao histórico."""
+        mensagem = {
+            "remetente": remetente,  # 'usuario' ou 'assistente'
+            "conteudo": conteudo,
+            "timestamp": datetime.now().isoformat()
+        }
+        self.mensagens.append(mensagem)
+        
+        # Limitar o número de mensagens armazenadas
+        if len(self.mensagens) > self.max_mensagens:
+            self.mensagens = self.mensagens[-self.max_mensagens:]
+    
+    def obter_historico_formatado(self) -> str:
+        """Retorna o histórico de conversa formatado para uso no prompt."""
+        if not self.mensagens:
+            return ""
+        
+        historico = "Histórico da conversa:\n"
+        for idx, msg in enumerate(self.mensagens, 1):
+            remetente = "Cliente" if msg["remetente"] == "usuario" else "Assistente"
+            historico += f"{idx}. {remetente}: {msg['conteudo']}\n"
+        
+        return historico
+    
+    def limpar_historico(self):
+        """Limpa o histórico de mensagens."""
+        self.mensagens = []
+
+class GerenciadorConversas:
+    """Gerencia múltiplas conversas de clientes."""
+    
+    def __init__(self):
+        self.conversas = {}  # id_sessao -> (memoria_cliente, historico_conversa)
+    
+    def iniciar_conversa(self, sessao_id: str = None) -> str:
+        """Inicia uma nova conversa e retorna o ID da sessão."""
+        if not sessao_id:
+            sessao_id = str(uuid.uuid4())
+        
+        if sessao_id not in self.conversas:
+            self.conversas[sessao_id] = (MemoriaCliente(), HistoricoConversa())
+        
+        return sessao_id
+    
+    def obter_memoria_cliente(self, sessao_id: str) -> MemoriaCliente:
+        """Obtém a memória do cliente para uma sessão específica."""
+        if sessao_id not in self.conversas:
+            self.iniciar_conversa(sessao_id)
+        
+        return self.conversas[sessao_id][0]
+    
+    def obter_historico(self, sessao_id: str) -> HistoricoConversa:
+        """Obtém o histórico de conversa para uma sessão específica."""
+        if sessao_id not in self.conversas:
+            self.iniciar_conversa(sessao_id)
+        
+        return self.conversas[sessao_id][1]
+    
+    def adicionar_mensagem(self, sessao_id: str, remetente: str, conteudo: str):
+        """Adiciona uma mensagem ao histórico da sessão."""
+        historico = self.obter_historico(sessao_id)
+        historico.adicionar_mensagem(remetente, conteudo)
+        
+        # Se for mensagem do usuário, tenta extrair informações
+        if remetente == "usuario":
+            self.extrair_informacoes_cliente(sessao_id, conteudo)
+    
+    def extrair_informacoes_cliente(self, sessao_id: str, mensagem: str):
+        """Extrai informações do cliente da mensagem."""
+        memoria = self.obter_memoria_cliente(sessao_id)
+        
+        # Registrar interação
+        memoria.registrar_interacao()
+        
+        # Extrair nome
+        if not memoria.nome:
+            patterns = [
+                r"[Mm]eu nome[^A-Za-z0-9]*(é|e)[^A-Za-z0-9]*([A-Za-z]+)",
+                r"[Ss]ou[^A-Za-z0-9]*o[^A-Za-z0-9]*([A-Za-z]+)",
+                r"[Ss]ou[^A-Za-z0-9]*a[^A-Za-z0-9]*([A-Za-z]+)",
+                r"[Mm]e chamo[^A-Za-z0-9]*([A-Za-z]+)",
+                r"[Pp]ode me chamar[^A-Za-z0-9]*(de)[^A-Za-z0-9]*([A-Za-z]+)"
+            ]
+            
+            for pattern in patterns:
+                match = re.search(pattern, mensagem)
+                if match:
+                    if len(match.groups()) > 1:
+                        nome = match.group(2)
+                    else:
+                        nome = match.group(1)
+                    
+                    if nome and len(nome) > 2:  # Evitar capturar artigos ou preposições
+                        memoria.atualizar_nome(nome)
+                        break
+        
+        # Extrair preferências de preço
+        preco_patterns = [
+            r"até[^0-9]*([0-9]+)[^0-9]*(mil|milh(ão|ões|ao|oes))",
+            r"máximo[^0-9]*([0-9]+)[^0-9]*(mil|milh(ão|ões|ao|oes))",
+            r"([0-9]+)[^0-9]*(mil|milh(ão|ões|ao|oes))[^A-Za-z0-9]*(no máximo|no maximo|máximo|maximo)"
+        ]
+        
+        for pattern in preco_patterns:
+            match = re.search(pattern, mensagem.lower())
+            if match:
+                valor = int(match.group(1))
+                unidade = match.group(2)
+                
+                if "milh" in unidade:
+                    valor *= 1000000
+                else:
+                    valor *= 1000
+                
+                memoria.atualizar_preferencia("preco_maximo", valor)
+                break
+        
+        # Extrair preferências de dormitórios
+        dormitorios_patterns = [
+            r"([0-9]+)[^A-Za-z0-9]*(quartos|dormitórios|dormitorios)",
+            r"(um|dois|três|quatro|cinco)[^A-Za-z0-9]*(quartos|dormitórios|dormitorios)"
+        ]
+        
+        for pattern in dormitorios_patterns:
+            match = re.search(pattern, mensagem.lower())
+            if match:
+                num_str = match.group(1)
+                
+                # Converter por extenso para número
+                conversao = {"um": 1, "dois": 2, "três": 3, "quatro": 4, "cinco": 5}
+                if num_str in conversao:
+                    num = conversao[num_str]
+                else:
+                    num = int(num_str)
+                
+                memoria.atualizar_preferencia("dormitorios", num)
+                break
+        
+        # Extrair preferências de bairro
+        bairros = ["centro", "praia", "cal", "grande", "torres", "jardim", "predial"]
+        for bairro in bairros:
+            if bairro in mensagem.lower():
+                memoria.atualizar_preferencia("bairro", bairro.capitalize())
+                break
+        
+        # Extrair características desejadas
+        features = [
+            ("piscina", r"piscina"),
+            ("churrasqueira", r"churrasqueira"),
+            ("mobiliado", r"mobiliado"),
+            ("garagem", r"garagem|vaga"),
+            ("suíte", r"su[íi]te"),
+            ("varanda", r"varanda|sacada"),
+            ("área de lazer", r"[áa]rea[^A-Za-z0-9]*de[^A-Za-z0-9]*lazer")
+        ]
+        
+        for feature_nome, pattern in features:
+            if re.search(pattern, mensagem.lower()):
+                memoria.adicionar_feature(feature_nome)
+
 class AssistenteImobiliaria:
     """Assistente de IA para responder perguntas sobre imóveis."""
     
@@ -22,6 +259,7 @@ class AssistenteImobiliaria:
         """Inicializa o assistente."""
         self.dados_imoveis = None
         self.llm = None  # Modelo de linguagem para respostas mais inteligentes
+        self.gerenciador_conversas = GerenciadorConversas()
         self.inicializar()
     
     def inicializar(self):
@@ -314,16 +552,30 @@ class AssistenteImobiliaria:
         
         return caracteristicas
     
-    def responder(self, pergunta: str) -> Dict[str, Any]:
-        """Responde a uma pergunta sobre imóveis."""
+    def responder(self, pergunta: str, sessao_id: str = None) -> Dict[str, Any]:
+        """Responde a uma pergunta sobre imóveis, utilizando contexto de conversas anteriores."""
         import re
+        
+        # Inicializar ou obter sessão
+        if not sessao_id:
+            sessao_id = self.gerenciador_conversas.iniciar_conversa()
+        
+        # Adicionar mensagem do usuário ao histórico
+        self.gerenciador_conversas.adicionar_mensagem(sessao_id, "usuario", pergunta)
+        
+        # Obter memória do cliente e histórico de conversa
+        memoria_cliente = self.gerenciador_conversas.obter_memoria_cliente(sessao_id)
+        historico_conversa = self.gerenciador_conversas.obter_historico(sessao_id)
         
         # Verificar se temos os dados carregados
         if not self.dados_imoveis:
+            resposta_texto = "Desculpe, ainda não tenho dados sobre imóveis para responder."
+            self.gerenciador_conversas.adicionar_mensagem(sessao_id, "assistente", resposta_texto)
             return {
-                "resposta": "Desculpe, ainda não tenho dados sobre imóveis para responder.",
+                "resposta": resposta_texto,
                 "imoveis_relacionados": [],
-                "imagens_relacionadas": []
+                "imagens_relacionadas": [],
+                "sessao_id": sessao_id
             }
         
         # Verificar se é uma pergunta sobre um imóvel específico
@@ -343,6 +595,9 @@ class AssistenteImobiliaria:
                 imovel = next((item for item in self.dados_imoveis if item["codigo"] == codigo_imovel), None)
                 
                 if imovel:
+                    # Registrar visita ao imóvel na memória do cliente
+                    memoria_cliente.registrar_visita_imovel(codigo_imovel)
+                    
                     # Construir resposta detalhada para este imóvel
                     caracteristicas = imovel.get("caracteristicas", {})
                     dormitorios = caracteristicas.get("Dormitórios", "não informado")
@@ -350,6 +605,12 @@ class AssistenteImobiliaria:
                     area = caracteristicas.get("Área total", "não informado")
                     
                     if self.llm:
+                        # Obter resumo da memória do cliente
+                        info_cliente = memoria_cliente.resumo()
+                        
+                        # Obter histórico da conversa
+                        hist_conversa = historico_conversa.obter_historico_formatado()
+                        
                         # Construir o prompt para o modelo de linguagem
                         prompt = f"""
                         Você é Torres Virtual, um assistente especializado em imóveis da Nova Torres Imobiliária, com personalidade calorosa e entusiasmada.
@@ -357,7 +618,11 @@ class AssistenteImobiliaria:
                         Seu objetivo é conversar como um corretor de imóveis muito amigável e experiente, que adora os imóveis que vende.
                         Responda de forma EXTREMAMENTE HUMANA E CONVERSACIONAL.
                         
-                        Forneça informações sobre o seguinte imóvel:
+                        {hist_conversa}
+                        
+                        {info_cliente}
+                        
+                        O cliente está perguntando sobre o seguinte imóvel:
                         
                         Código: {imovel["codigo"]}
                         Título: {imovel["titulo"]}
@@ -384,6 +649,13 @@ class AssistenteImobiliaria:
                         7. Termine com uma pergunta ou convite para agendar uma visita
                         8. Mencione o link para mais detalhes
                         9. Use frases curtas, expressões de empolgação, e tom animado!
+                        
+                        PERSONALIZAÇÃO:
+                        1. Se souber o nome do cliente, use-o na saudação e no decorrer da conversa
+                        2. Se o cliente já tiver visitado este imóvel antes, mencione isso
+                        3. Se souber as preferências do cliente, destaque como este imóvel atende a essas preferências
+                        4. Adapte a resposta com base no histórico da conversa, se relevante
+                        5. Faça referências a perguntas ou comentários anteriores que o cliente possa ter feito
                         
                         FORMATAÇÃO DA RESPOSTA:
                         1. TÍTULO: Comece com um título em caixa alta e negrito para o imóvel em uma linha separada
@@ -423,7 +695,7 @@ class AssistenteImobiliaria:
                         
                         # Gerar resposta com o modelo de linguagem
                         try:
-                            resposta = self.llm.predict(prompt)
+                            resposta = self.llm.invoke(prompt).content
                         except Exception as e:
                             print(f"Erro ao gerar resposta com o modelo: {e}")
                             # Fallback para resposta estruturada simples
@@ -431,16 +703,24 @@ class AssistenteImobiliaria:
                             resposta += f"Está localizado em {imovel['endereco']}. "
                             resposta += f"Possui {dormitorios} dormitório(s), {banheiros} banheiro(s) e área total de {area}. "
                             resposta += f"\n\n{imovel['descricao']}"
+                            
+                            # Adicionar saudação personalizada se souber o nome do cliente
+                            if memoria_cliente.nome:
+                                resposta = f"{memoria_cliente.nome}, " + resposta
                     else:
-                        # Resposta estruturada simples
+                        # Resposta sem modelo de linguagem
                         resposta = f"O imóvel {codigo_imovel} é {imovel['titulo']} e custa {imovel['preco']}. "
                         resposta += f"Está localizado em {imovel['endereco']}. "
                         resposta += f"Possui {dormitorios} dormitório(s), {banheiros} banheiro(s) e área total de {area}. "
                         resposta += f"\n\n{imovel['descricao']}"
+                        
+                        # Adicionar saudação personalizada se souber o nome do cliente
+                        if memoria_cliente.nome:
+                            resposta = f"{memoria_cliente.nome}, " + resposta
                     
-                    # Adicionar imovel relacionado
+                    # Adicionar informações do imóvel para exibição
                     imovel_info = {
-                        "codigo": imovel["codigo"],
+                        "codigo": codigo_imovel,
                         "titulo": imovel["titulo"],
                         "preco": imovel["preco"],
                         "link": imovel["link"],
@@ -453,31 +733,85 @@ class AssistenteImobiliaria:
                     }
                     imoveis_relacionados.append(imovel_info)
                     
-                    # PRIORIZAR LINKS DIRETOS DAS IMAGENS - esta é a parte que precisamos corrigir
-                    # Verificar se o imóvel tem links_imagens (novo formato com URLs diretas)
+                    # Adicionar imagens do imóvel
                     if "links_imagens" in imovel and imovel["links_imagens"]:
-                        # Filtrar links inválidos
-                        imagens_relacionadas = [link for link in imovel["links_imagens"] 
-                                              if link and not link.endswith('/') 
-                                              and not link == "https://www.novatorres.com.br/"]
-                    # Se não tiver links_imagens, verificar se tem imagem_principal
+                        imagens_relacionadas = [link for link in imovel["links_imagens"][:5] 
+                                             if link and not link.endswith('/') 
+                                             and not link == "https://www.novatorres.com.br/"]
                     elif "imagem_principal" in imovel and imovel["imagem_principal"]:
                         imagens_relacionadas = [imovel["imagem_principal"]]
-                    # Como último recurso, usar caminhos locais (formato antigo)
                     elif "imagens_locais" in imovel and imovel["imagens_locais"]:
-                        # Usar URLs completas em vez de caminhos relativos
                         base_url = "https://www.novatorres.com.br/images/"
                         imagens_relacionadas = [base_url + img.replace('\\', '/') for img in imovel["imagens_locais"]]
                 else:
+                    # Imóvel não encontrado
                     resposta = f"Desculpe, não encontrei nenhum imóvel com o código {codigo_imovel}."
-            
-            # Caso contrário, buscar documentos relevantes e responder
+                    
+                    # Adicionar saudação personalizada se souber o nome do cliente
+                    if memoria_cliente.nome:
+                        resposta = f"{memoria_cliente.nome}, " + resposta
             else:
-                # Buscar imóveis que possam ser relevantes
-                imoveis_filtrados = self.buscar_imoveis_por_texto(pergunta)
+                # Verificar se a pergunta é apenas uma saudação
+                saudacoes = ["oi", "olá", "ola", "bom dia", "boa tarde", "boa noite", "tudo bem", "como vai", "ei", "opa"]
+                pergunta_lower = pergunta.lower()
+                palavras = pergunta_lower.split()
                 
-                if imoveis_filtrados and self.llm:
-                    # Construir informações sobre os imóveis para o modelo
+                # Se a pergunta for curta e contiver apenas saudações, responder sem mostrar imóveis
+                if len(palavras) <= 5 and any(saud in pergunta_lower for saud in saudacoes):
+                    # Verificar se é uma pergunta sobre como está
+                    
+                    # Preparar saudação personalizada
+                    if memoria_cliente.nome:
+                        saudacao_nome = f"{memoria_cliente.nome}, "
+                    else:
+                        saudacao_nome = ""
+                    
+                    # Determinar saudação com base no horário
+                    from datetime import datetime
+                    hora_atual = datetime.now().hour
+                    saudacao_hora = "Bom dia" if 5 <= hora_atual < 12 else "Boa tarde" if 12 <= hora_atual < 18 else "Boa noite"
+                    
+                    if "tudo bem" in pergunta_lower or "como vai" in pergunta_lower:
+                        resposta = f"{saudacao_hora}, {saudacao_nome}que bom receber sua mensagem! Estou ótimo, obrigado por perguntar! 😊\n\n"
+                        resposta += "Estou aqui para ajudar você a encontrar o imóvel dos seus sonhos! Posso mostrar apartamentos, casas, ou qualquer outro tipo de propriedade. "
+                        resposta += "É só me dizer o que você está procurando - número de quartos, localização, faixa de preço... Estou à disposição! Em que posso ajudar hoje?"
+                    else:
+                        resposta = f"{saudacao_hora}, {saudacao_nome}que bom que você entrou em contato! 👋\n\n"
+                        resposta += "Eu sou o assistente virtual da Nova Torres Imobiliária, estou aqui para ajudar você a encontrar o imóvel perfeito. "
+                        resposta += "Posso te mostrar opções de apartamentos, casas, terrenos e muito mais. "
+                        resposta += "Diga-me, o que você está procurando? Tem alguma preferência de localização, número de quartos ou faixa de preço?"
+                    
+                    # Adicionar mensagem do assistente ao histórico
+                    self.gerenciador_conversas.adicionar_mensagem(sessao_id, "assistente", resposta)
+                    
+                    # Retornar resultado sem imóveis ou imagens
+                    return {
+                        "resposta": resposta,
+                        "imoveis_relacionados": [],
+                        "imagens_relacionadas": [],
+                        "sessao_id": sessao_id
+                    }
+                
+                # Busca de imóveis baseada no texto da pergunta e no perfil do cliente
+                criterios_busca = {}
+                
+                # Usar as preferências do cliente como critérios iniciais de busca
+                if memoria_cliente.preferencias["preco_maximo"]:
+                    criterios_busca["preco_maximo"] = memoria_cliente.preferencias["preco_maximo"]
+                if memoria_cliente.preferencias["dormitorios"]:
+                    criterios_busca["dormitorios"] = memoria_cliente.preferencias["dormitorios"]
+                if memoria_cliente.preferencias["bairro"]:
+                    criterios_busca["bairro"] = memoria_cliente.preferencias["bairro"]
+                
+                # Adicionar critérios extraídos da pergunta atual
+                criterios_pergunta = self.extrair_criterios_busca(pergunta)
+                criterios_busca.update(criterios_pergunta)
+                
+                # Buscar imóveis relevantes
+                imoveis_filtrados = self.buscar_imoveis(criterios_busca)
+                
+                if imoveis_filtrados:
+                    # Preparar contexto dos imóveis para o prompt
                     contexto_imoveis = ""
                     for i, imovel in enumerate(imoveis_filtrados[:3]):
                         caract = imovel.get("caracteristicas", {})
@@ -490,13 +824,23 @@ class AssistenteImobiliaria:
                         contexto_imoveis += f"Banheiros: {caract.get('Banheiros', 'Não informado')}\n"
                         contexto_imoveis += f"Área: {caract.get('Área total', 'Não informada')}\n"
                     
+                    # Obter resumo da memória do cliente
+                    info_cliente = memoria_cliente.resumo()
+                    
+                    # Obter histórico da conversa
+                    hist_conversa = historico_conversa.obter_historico_formatado()
+                    
                     # Construir o prompt para o modelo de linguagem
                     prompt = f"""
                     Você é Torres Virtual, um assistente especializado em imóveis da Nova Torres Imobiliária, com personalidade calorosa e entusiasmada.
                     
                     O usuário perguntou: "{pergunta}"
                     
-                    Com base nesta pergunta, encontrei os seguintes imóveis que podem ser relevantes:
+                    {hist_conversa}
+                    
+                    {info_cliente}
+                    
+                    Com base nesta pergunta e no perfil do cliente, encontrei os seguintes imóveis que podem ser relevantes:
                     {contexto_imoveis}
                     
                     DIRETRIZES IMPORTANTES PARA SUA RESPOSTA:
@@ -510,6 +854,13 @@ class AssistenteImobiliaria:
                     8. Crie um texto FLUIDO e NATURAL, não apenas listando características
                     9. Use gírias comuns do mercado imobiliário como "ótima planta", "acabamento de primeira", "localização privilegiada"
                     10. Termine com uma pergunta ou convite para o cliente
+                    
+                    PERSONALIZAÇÃO:
+                    1. Se souber o nome do cliente, use-o na saudação e no decorrer da conversa
+                    2. Se o cliente já tiver visitado algum desses imóveis antes, mencione isso
+                    3. Adapte as recomendações considerando as preferências explícitas do cliente
+                    4. Faça referências a perguntas ou comentários anteriores do cliente, se relevante
+                    5. Se o cliente já demonstrou interesse em um tipo específico de imóvel, destaque isso
                     
                     FORMATAÇÃO DA RESPOSTA:
                     1. TÍTULO: Comece com um título em caixa alta e negrito para a seleção de imóveis, em uma linha separada
@@ -560,14 +911,14 @@ class AssistenteImobiliaria:
                     
                     # Gerar resposta com o modelo de linguagem
                     try:
-                        resposta = self.llm.predict(prompt)
+                        resposta = self.llm.invoke(prompt).content
                     except Exception as e:
                         print(f"Erro ao gerar resposta com o modelo: {e}")
                         # Fallback para resposta estruturada simples
-                        resposta = self._gerar_resposta_generica(pergunta)
+                        resposta = self._gerar_resposta_generica(pergunta, memoria_cliente)
                 else:
                     # Usar resposta genérica como fallback
-                    resposta = self._gerar_resposta_generica(pergunta)
+                    resposta = self._gerar_resposta_generica(pergunta, memoria_cliente)
                 
                 # Adicionar até 3 imóveis aos resultados
                 for imovel in imoveis_filtrados[:3]:
@@ -610,6 +961,10 @@ class AssistenteImobiliaria:
             print(f"Erro ao processar pergunta: {e}")
             print(traceback.format_exc())
             resposta = "Desculpe, ocorreu um erro ao processar sua pergunta. Por favor, tente novamente mais tarde."
+            
+            # Adicionar saudação personalizada se souber o nome do cliente
+            if memoria_cliente and memoria_cliente.nome:
+                resposta = f"{memoria_cliente.nome}, " + resposta
         
         # Limitar o número de imagens retornadas
         imagens_relacionadas = imagens_relacionadas[:5] if imagens_relacionadas else []
@@ -618,20 +973,55 @@ class AssistenteImobiliaria:
         imagens_relacionadas = [img if img.startswith("http") else f"https://www.novatorres.com.br/{img.lstrip('/')}" 
                              for img in imagens_relacionadas if img]
         
+        # Adicionar mensagem do assistente ao histórico
+        self.gerenciador_conversas.adicionar_mensagem(sessao_id, "assistente", resposta)
+        
         return {
             "resposta": resposta,
             "imoveis_relacionados": imoveis_relacionados,
-            "imagens_relacionadas": imagens_relacionadas
+            "imagens_relacionadas": imagens_relacionadas,
+            "sessao_id": sessao_id
         }
         
-    def _gerar_resposta_generica(self, pergunta: str) -> str:
+    def _gerar_resposta_generica(self, pergunta: str, memoria_cliente: MemoriaCliente) -> str:
         """Gera uma resposta genérica com base na pergunta do usuário."""
         # Verificar se é uma busca por preço
         import re
         
-        match_preco = re.search(r'(\d+)[\s]*(mil|milh[õo]es)', pergunta.lower())
+        # Preparar saudação personalizada se souber o nome do cliente
+        saudacao = ""
+        if memoria_cliente and memoria_cliente.nome:
+            saudacao = f"{memoria_cliente.nome}, "
         
-        if "preço" in pergunta.lower() or "valor" in pergunta.lower() or match_preco:
+        # Verificar se a pergunta é apenas uma saudação
+        saudacoes = ["oi", "olá", "ola", "bom dia", "boa tarde", "boa noite", "tudo bem", "como vai", "ei", "opa"]
+        pergunta_lower = pergunta.lower()
+        
+        # Se a pergunta for curta e contiver apenas saudações, responder de forma humanizada
+        palavras = pergunta_lower.split()
+        if len(palavras) <= 5 and any(saudacao in pergunta_lower for saudacao in saudacoes):
+            # Verificar quais saudações estão presentes
+            saudacoes_presentes = [s for s in saudacoes if s in pergunta_lower]
+            
+            # Responder de forma personalizada com base nas saudações detectadas
+            hora_atual = datetime.now().hour
+            saudacao_hora = "Bom dia" if 5 <= hora_atual < 12 else "Boa tarde" if 12 <= hora_atual < 18 else "Boa noite"
+            
+            if "tudo bem" in pergunta_lower or "como vai" in pergunta_lower:
+                resposta = f"{saudacao_hora}, {saudacao}que bom receber sua mensagem! Estou ótimo, obrigado por perguntar! 😊\n\n"
+                resposta += "Estou aqui para ajudar você a encontrar o imóvel dos seus sonhos! Posso mostrar apartamentos, casas, ou qualquer outro tipo de propriedade. "
+                resposta += "É só me dizer o que você está procurando - número de quartos, localização, faixa de preço... Estou à disposição! Em que posso ajudar hoje?"
+                return resposta
+            else:
+                resposta = f"{saudacao_hora}, {saudacao}que bom que você entrou em contato! 👋\n\n"
+                resposta += "Eu sou o assistente virtual da Nova Torres Imobiliária, estou aqui para ajudar você a encontrar o imóvel perfeito. "
+                resposta += "Posso te mostrar opções de apartamentos, casas, terrenos e muito mais. "
+                resposta += "Diga-me, o que você está procurando? Tem alguma preferência de localização, número de quartos ou faixa de preço?"
+                return resposta
+        
+        match_preco = re.search(r'(\d+)[\s]*(mil|milh[õo]es)', pergunta_lower)
+        
+        if "preço" in pergunta_lower or "valor" in pergunta_lower or match_preco:
             valor = None
             if match_preco:
                 valor = match_preco.group(1)
@@ -645,15 +1035,15 @@ class AssistenteImobiliaria:
             if valor:
                 return f"""**IMÓVEIS NA SUA FAIXA DE PREÇO** 💰
 
-Olha só que legal! Temos diversos imóveis na faixa de preço de **R$ {valor:,}**.
+{saudacao}Olha só que legal! Temos diversos imóveis na faixa de preço de **R$ {valor:,}**.
 
 Aqui estão algumas opções incríveis que selecionei especialmente para você:
 
 ---------------"""
             else:
-                return """**IMÓVEIS COM DIFERENTES PREÇOS** 💰
+                return f"""**IMÓVEIS COM DIFERENTES PREÇOS** 💰
 
-Temos imóveis em diversas faixas de preço para atender ao seu orçamento!
+{saudacao}Temos imóveis em diversas faixas de preço para atender ao seu orçamento!
 
 Confira estas opções sensacionais que separei especialmente para você:
 
@@ -665,7 +1055,7 @@ Confira estas opções sensacionais que separei especialmente para você:
             if local.lower() in pergunta.lower():
                 return f"""**IMÓVEIS EM {local.upper()}** 📍
 
-Que maravilha! Temos diversas opções na região de **{local.capitalize()}**.
+{saudacao}Que maravilha! Temos diversas opções na região de **{local.capitalize()}**.
 
 Confira estas propriedades especiais que selecionei para você:
 
@@ -678,130 +1068,189 @@ Confira estas propriedades especiais que selecionei para você:
             if num_quartos:
                 return f"""**IMÓVEIS COM {num_quartos} DORMITÓRIOS** 🛏️
 
-Super legal! Encontrei imóveis com **{num_quartos} dormitórios** disponíveis.
+{saudacao}Super legal! Encontrei imóveis com **{num_quartos} dormitórios** disponíveis.
 
 Dê uma olhada nestas opções incríveis:
 
 ---------------"""
             else:
-                return """**IMÓVEIS COM DIFERENTES CONFIGURAÇÕES** 🛏️
+                return f"""**IMÓVEIS COM DIFERENTES CONFIGURAÇÕES** 🛏️
 
-Temos imóveis com diferentes configurações de dormitórios para atender à sua necessidade!
+{saudacao}Temos imóveis com diferentes configurações de dormitórios para atender à sua necessidade!
 
 Confira estas opções que separei especialmente para você:
 
 ---------------"""
         
-        # Resposta padrão
-        return """**IMÓVEIS SELECIONADOS PARA VOCÊ** 🏠
+        # Verificar se há preferências registradas
+        if memoria_cliente and memoria_cliente.preferencias:
+            prefs = []
+            if memoria_cliente.preferencias["preco_maximo"]:
+                prefs.append(f"preço até R$ {memoria_cliente.preferencias['preco_maximo']:,}")
+            if memoria_cliente.preferencias["dormitorios"]:
+                prefs.append(f"{memoria_cliente.preferencias['dormitorios']} dormitórios")
+            if memoria_cliente.preferencias["bairro"]:
+                prefs.append(f"localização no bairro {memoria_cliente.preferencias['bairro']}")
+            if memoria_cliente.preferencias["features"]:
+                prefs.append(f"características como {', '.join(memoria_cliente.preferencias['features'][:3])}")
+            
+            if prefs:
+                prefs_texto = ", ".join(prefs)
+                return f"""**IMÓVEIS BASEADOS NO SEU PERFIL** 🎯
 
-Olha só que bacana! Encontrei alguns imóveis que podem te interessar com base na sua pergunta.
+{saudacao}Com base no nosso histórico de conversas, selecionei imóveis com {prefs_texto}.
+
+Estas opções atendem ao seu perfil de preferências:
+
+---------------"""
+        
+        # Resposta padrão
+        return f"""**IMÓVEIS SELECIONADOS PARA VOCÊ** 🏠
+
+{saudacao}Olha só que bacana! Encontrei alguns imóveis que podem te interessar com base na sua pergunta.
 
 Confira estas opções especiais:
 
 ---------------"""
         
-    def buscar_imoveis_por_texto(self, texto: str) -> List[Dict[str, Any]]:
-        """Busca imóveis com base em um texto livre."""
-        import re
-        
-        # Extrair critérios da pergunta
+    def extrair_criterios_busca(self, texto: str) -> Dict[str, Any]:
+        """Extrai critérios de busca a partir do texto da pergunta."""
         criterios = {}
         
-        # Buscar por preço
+        # Extrair preço
         match_preco = re.search(r'(\d+)[\s]*(mil|milh[õo]es)', texto.lower())
         if match_preco:
             valor = int(match_preco.group(1))
             unidade = match_preco.group(2)
             
             if unidade.startswith("milh"):
-                valor = valor * 1000000
+                valor *= 1000000
             else:
-                valor = valor * 1000
+                valor *= 1000
             
-            criterios["preco_max"] = valor * 1.2  # 20% acima para dar margem
-            criterios["preco_min"] = valor * 0.8  # 20% abaixo para dar margem
+            criterios["preco_maximo"] = valor
         
-        # Buscar por quantidade de quartos
-        match_quartos = re.search(r'(\d+)[\s]*(quartos|dormitórios|dormitorio)', texto.lower())
+        # Extrair número de dormitórios
+        match_quartos = re.search(r'(\d+)[\s]*(quartos|dormitórios|dormitorios)', texto.lower())
         if match_quartos:
             criterios["dormitorios"] = int(match_quartos.group(1))
         
-        # Buscar por localização
+        # Extrair bairro/localização
         locais = ["centro", "praia", "cal", "grande", "torres", "jardim", "predial"]
         for local in locais:
-            if local.lower() in texto.lower():
-                criterios["localizacao"] = local
+            if local in texto.lower():
+                criterios["bairro"] = local.capitalize()
                 break
         
-        # Realizar a busca
-        return self.buscar_imoveis(criterios)
+        # Extrair tipo de imóvel
+        tipos_imovel = {
+            "apartamento": ["apartamento", "apto", "ap"],
+            "casa": ["casa", "residência", "residencia"],
+            "terreno": ["terreno", "lote"],
+            "cobertura": ["cobertura"],
+            "sala comercial": ["sala comercial", "comercial", "escritório", "escritorio"]
+        }
         
-    def buscar_imoveis(self, filtros: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Busca imóveis com base em filtros específicos."""
+        for tipo, palavras_chave in tipos_imovel.items():
+            for palavra in palavras_chave:
+                if palavra in texto.lower():
+                    criterios["tipo_imovel"] = tipo
+                    break
+            if "tipo_imovel" in criterios:
+                break
+        
+        # Extrair características especiais
+        features = {
+            "piscina": ["piscina"],
+            "churrasqueira": ["churrasqueira", "churrasco"],
+            "mobiliado": ["mobiliado", "mobília", "mobilia"],
+            "garagem": ["garagem", "vaga", "vagas"],
+            "suíte": ["suíte", "suite"],
+            "varanda": ["varanda", "sacada"],
+            "área de lazer": ["lazer", "área de lazer", "area de lazer"]
+        }
+        
+        criterios["features"] = []
+        for feature, palavras_chave in features.items():
+            for palavra in palavras_chave:
+                if palavra in texto.lower():
+                    criterios["features"].append(feature)
+                    break
+        
+        return criterios
+        
+    def buscar_imoveis(self, criterios: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Busca imóveis com base em critérios específicos."""
         if not self.dados_imoveis:
             return []
         
-        resultados = []
+        resultado = self.dados_imoveis
         
-        for imovel in self.dados_imoveis:
-            # Flag para controlar se o imóvel atende a todos os critérios
-            atende_criterios = True
-            
-            # Verificar preço mínimo
-            if "preco_min" in filtros:
-                try:
-                    # Extrair apenas números do preço
-                    import re
-                    preco_numerico = float(re.sub(r'[^\d.]', '', imovel.get("preco", "0").replace(".", "").replace(",", ".")))
-                    if preco_numerico < filtros["preco_min"]:
-                        atende_criterios = False
-                        continue
-                except:
-                    # Se não conseguir converter o preço, ignorar este critério
-                    pass
-            
-            # Verificar preço máximo
-            if "preco_max" in filtros:
-                try:
-                    # Extrair apenas números do preço
-                    import re
-                    preco_numerico = float(re.sub(r'[^\d.]', '', imovel.get("preco", "0").replace(".", "").replace(",", ".")))
-                    if preco_numerico > filtros["preco_max"]:
-                        atende_criterios = False
-                        continue
-                except:
-                    # Se não conseguir converter o preço, ignorar este critério
-                    pass
-            
-            # Verificar número de dormitórios
-            if "dormitorios" in filtros:
-                try:
-                    dormitorios = imovel.get("caracteristicas", {}).get("Dormitórios", "0")
-                    dormitorios_num = int(re.sub(r'[^\d]', '', dormitorios))
-                    if dormitorios_num != filtros["dormitorios"]:
-                        atende_criterios = False
-                        continue
-                except:
-                    # Se não conseguir converter, ignorar este critério
-                    pass
-            
-            # Verificar localização
-            if "localizacao" in filtros:
-                loc = filtros["localizacao"].lower()
-                endereco = imovel.get("endereco", "").lower()
-                titulo = imovel.get("titulo", "").lower()
-                
-                if loc not in endereco and loc not in titulo:
-                    atende_criterios = False
-                    continue
-            
-            # Se passou por todos os filtros, adicionar aos resultados
-            if atende_criterios:
-                resultados.append(imovel)
+        # Filtrar por preço máximo
+        if "preco_maximo" in criterios and criterios["preco_maximo"]:
+            resultado = [
+                imovel for imovel in resultado
+                if self._extrair_valor_numerico(imovel.get("preco", "")) <= criterios["preco_maximo"]
+            ]
         
-        # Limitar a 10 resultados
-        return resultados[:10]
+        # Filtrar por número de dormitórios
+        if "dormitorios" in criterios and criterios["dormitorios"]:
+            resultado = [
+                imovel for imovel in resultado 
+                if imovel.get("caracteristicas", {}).get("Dormitórios") == str(criterios["dormitorios"])
+                or imovel.get("caracteristicas", {}).get("Dormitórios") == criterios["dormitorios"]
+            ]
+        
+        # Filtrar por bairro/localização
+        if "bairro" in criterios and criterios["bairro"]:
+            bairro = criterios["bairro"].lower()
+            resultado = [
+                imovel for imovel in resultado
+                if bairro in imovel.get("endereco", "").lower()
+                or bairro in imovel.get("titulo", "").lower()
+                or bairro in imovel.get("descricao", "").lower()
+            ]
+        
+        # Filtrar por tipo de imóvel
+        if "tipo_imovel" in criterios and criterios["tipo_imovel"]:
+            tipo = criterios["tipo_imovel"].lower()
+            resultado = [
+                imovel for imovel in resultado
+                if tipo in imovel.get("titulo", "").lower()
+                or tipo in imovel.get("descricao", "").lower()
+                or tipo == imovel.get("caracteristicas", {}).get("Tipo", "").lower()
+            ]
+        
+        # Filtrar por características (features)
+        if "features" in criterios and criterios["features"]:
+            for feature in criterios["features"]:
+                # Filtragem progressiva por cada feature
+                resultado = [
+                    imovel for imovel in resultado
+                    if feature.lower() in imovel.get("descricao", "").lower()
+                    or any(feature.lower() in k.lower() or feature.lower() in v.lower() 
+                           for k, v in imovel.get("caracteristicas", {}).items())
+                ]
+        
+        # Limitar o número de resultados
+        return resultado[:10]  # Retornar no máximo 10 imóveis
+    
+    def _extrair_valor_numerico(self, texto_preco: str) -> float:
+        """Extrai o valor numérico de um texto de preço."""
+        import re
+        
+        # Remover caracteres não numéricos exceto vírgula e ponto
+        texto_limpo = re.sub(r'[^\d,.]', '', texto_preco)
+        
+        # Substituir vírgula por ponto
+        texto_limpo = texto_limpo.replace(',', '.')
+        
+        # Extrair o primeiro número válido
+        match = re.search(r'\d+(\.\d+)?', texto_limpo)
+        if match:
+            return float(match.group(0))
+        
+        return float('inf')  # Retornar infinito se não conseguir extrair
 
 
 # Para teste direto
@@ -828,5 +1277,5 @@ if __name__ == "__main__":
         
         if resposta["imagens_relacionadas"]:
             print("\nImagens disponíveis:")
-            for img in resposta["imagens_relacionadas"][:3]:  # Mostrar apenas 3 imagens
-                print(f"- {img}") 
+            for img in resposta["imagens_relacionadas"][:3]:  # Mostrar apenas 3 imagens 
+                print(f"  - {img}") 

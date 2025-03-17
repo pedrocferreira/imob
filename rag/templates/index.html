@@ -281,52 +281,41 @@
         .btn-primary {
             background-color: var(--primary-color);
             border: none;
-            padding: 12px 25px;
-            font-weight: 600;
+            padding: 10px 20px;
         }
         
         .btn-primary:hover {
             background-color: #0b5ed7;
         }
         
-        .section-title {
-            position: relative;
-            padding-bottom: 15px;
-            margin-bottom: 25px;
-            font-weight: 600;
-            color: var(--dark-color);
-        }
-        
-        .section-title::after {
-            content: '';
-            position: absolute;
-            bottom: 0;
-            left: 0;
-            width: 50px;
-            height: 3px;
-            background-color: var(--primary-color);
-        }
-        
-        .footer {
-            margin-top: 50px;
-            text-align: center;
-            padding: 20px;
-            background-color: white;
-            border-radius: 15px;
-            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.05);
-        }
-        
-        .placeholder-img {
-            background-color: #e9ecef;
+        /* Nova seção para o controlador de sessão */
+        .session-controls {
             display: flex;
-            align-items: center;
-            justify-content: center;
-            height: 200px;
-            color: var(--secondary-color);
+            justify-content: flex-end;
+            margin-bottom: 10px;
         }
         
-        .placeholder-img i {
-            font-size: 3rem;
+        .session-controls .btn {
+            font-size: 0.85rem;
+            padding: 0.25rem 0.5rem;
+            margin-left: 0.5rem;
+        }
+        
+        .session-controls .btn-outline-secondary {
+            border-color: #ced4da;
+            color: #6c757d;
+        }
+        
+        .session-controls .btn-outline-secondary:hover {
+            background-color: #f8f9fa;
+            color: #495057;
+        }
+        
+        .session-info {
+            font-size: 0.8rem;
+            color: #6c757d;
+            text-align: right;
+            margin-bottom: 5px;
         }
         
         /* Responsive adjustments */
@@ -382,6 +371,16 @@
         
         <div class="row">
             <div class="col-md-8 offset-md-2">
+                <!-- Controles de sessão -->
+                <div class="session-controls">
+                    <button id="limpar-sessao" class="btn btn-outline-secondary">
+                        <i class="fas fa-redo-alt"></i> Nova Conversa
+                    </button>
+                </div>
+                <div class="session-info" id="session-info">
+                    <!-- Informações da sessão serão exibidas aqui -->
+                </div>
+                
                 <div id="chat-container" class="chat-container mb-3">
                     <div class="system-message">Bem-vindo ao Assistente da Nova Torres Imobiliária! Como posso ajudá-lo hoje?</div>
                 </div>
@@ -491,6 +490,19 @@
             const enviarBtn = document.getElementById('enviar-btn');
             const resultadosDiv = document.getElementById('resultados');
             const loadingSpinner = document.getElementById('loading-spinner');
+            const limparSessaoBtn = document.getElementById('limpar-sessao');
+            const sessionInfoDiv = document.getElementById('session-info');
+            
+            // Variáveis de sessão
+            let sessaoId = '{{ sessao_id }}';
+            const historico = [];
+            let mensagensCarregadas = false;
+            
+            // Inicializar o histórico de mensagens do LocalStorage
+            initializeHistorico();
+            
+            // Atualizar info da sessão
+            updateSessionInfo();
             
             // Eventos
             enviarBtn.addEventListener('click', enviarPergunta);
@@ -500,12 +512,14 @@
                 }
             });
             
+            limparSessaoBtn.addEventListener('click', limparSessao);
+            
             function enviarPergunta() {
                 const pergunta = perguntaInput.value.trim();
                 if (!pergunta) return;
                 
                 // Adicionar mensagem do usuário
-                adicionarMensagem(pergunta, 'user');
+                adicionarMensagem(pergunta, 'usuario');
                 
                 // Limpar input e mostrar loading
                 perguntaInput.value = '';
@@ -518,7 +532,7 @@
                     headers: {
                         'Content-Type': 'application/json'
                     },
-                    body: JSON.stringify({ pergunta: pergunta })
+                    body: JSON.stringify({ pergunta: pergunta, sessao_id: sessaoId })
                 })
                 .then(response => {
                     if (!response.ok) {
@@ -527,8 +541,14 @@
                     return response.json();
                 })
                 .then(data => {
+                    // Atualizar ID da sessão se recebido
+                    if (data.sessao_id) {
+                        sessaoId = data.sessao_id;
+                        updateSessionInfo();
+                    }
+                    
                     // Adicionar resposta do assistente
-                    adicionarMensagem(data.resposta, 'assistant');
+                    adicionarMensagem(data.resposta, 'assistente');
                     
                     console.log("Imagens recebidas:", data.imagens_relacionadas);
                     
@@ -552,7 +572,7 @@
                 })
                 .catch(error => {
                     console.error('Erro:', error);
-                    adicionarMensagem('Desculpe, ocorreu um erro ao processar sua pergunta. Por favor, tente novamente mais tarde.', 'assistant');
+                    adicionarMensagem('Desculpe, ocorreu um erro ao processar sua pergunta. Por favor, tente novamente mais tarde.', 'assistente');
                 })
                 .finally(() => {
                     loadingSpinner.classList.add('hidden');
@@ -564,18 +584,35 @@
                 const msgDiv = document.createElement('div');
                 msgDiv.classList.add('chat-message');
                 
-                if (tipo === 'user') {
+                if (tipo === 'usuario') {
                     msgDiv.classList.add('user-message');
                     msgDiv.textContent = texto;
-                } else if (tipo === 'assistant') {
+                    
+                    // Adicionar ao histórico
+                    historicoAdd({
+                        tipo: 'usuario',
+                        texto: texto,
+                        timestamp: new Date().toISOString()
+                    });
+                } else if (tipo === 'assistente') {
                     msgDiv.classList.add('assistant-message');
                     // Converter markdown para HTML
                     const htmlTexto = converterMarkdownParaHTML(texto);
                     msgDiv.innerHTML = htmlTexto;
+                    
+                    // Adicionar ao histórico
+                    historicoAdd({
+                        tipo: 'assistente',
+                        texto: texto,
+                        timestamp: new Date().toISOString()
+                    });
                 }
                 
                 chatContainer.appendChild(msgDiv);
                 chatContainer.scrollTop = chatContainer.scrollHeight;
+                
+                // Salvar histórico no localStorage
+                salvarHistorico();
             }
             
             // Função para converter markdown para HTML
@@ -600,6 +637,104 @@
                 }
                 
                 return html;
+            }
+            
+            // Funções para gerenciar o histórico de mensagens
+            function initializeHistorico() {
+                try {
+                    const savedHistorico = localStorage.getItem(`chat_history_${sessaoId}`);
+                    if (savedHistorico) {
+                        const parsed = JSON.parse(savedHistorico);
+                        if (Array.isArray(parsed)) {
+                            // Carregar o histórico salvo
+                            parsed.forEach(msg => {
+                                historico.push(msg);
+                            });
+                            
+                            // Exibir mensagens salvas
+                            exibirHistoricoSalvo();
+                        }
+                    }
+                } catch (e) {
+                    console.error('Erro ao inicializar histórico:', e);
+                }
+            }
+            
+            function exibirHistoricoSalvo() {
+                if (mensagensCarregadas || historico.length === 0) return;
+                mensagensCarregadas = true;
+                
+                // Limpar mensagens de boas-vindas
+                chatContainer.innerHTML = '';
+                
+                // Adicionar mensagens do histórico sem re-salvar
+                historico.forEach(msg => {
+                    const msgDiv = document.createElement('div');
+                    msgDiv.classList.add('chat-message');
+                    
+                    if (msg.tipo === 'usuario') {
+                        msgDiv.classList.add('user-message');
+                        msgDiv.textContent = msg.texto;
+                    } else if (msg.tipo === 'assistente') {
+                        msgDiv.classList.add('assistant-message');
+                        // Converter markdown para HTML
+                        const htmlTexto = converterMarkdownParaHTML(msg.texto);
+                        msgDiv.innerHTML = htmlTexto;
+                    }
+                    
+                    chatContainer.appendChild(msgDiv);
+                });
+                
+                // Rolar para o final
+                chatContainer.scrollTop = chatContainer.scrollHeight;
+            }
+            
+            function historicoAdd(mensagem) {
+                historico.push(mensagem);
+                
+                // Limite de 50 mensagens no histórico
+                if (historico.length > 50) {
+                    historico.shift();
+                }
+            }
+            
+            function salvarHistorico() {
+                try {
+                    localStorage.setItem(`chat_history_${sessaoId}`, JSON.stringify(historico));
+                } catch (e) {
+                    console.error('Erro ao salvar histórico:', e);
+                }
+            }
+            
+            function limparSessao() {
+                fetch('/limpar-sessao')
+                .then(response => response.json())
+                .then(data => {
+                    // Atualizar sessão
+                    sessaoId = data.nova_sessao;
+                    
+                    // Limpar histórico
+                    historico.length = 0;
+                    
+                    // Atualizar localStorage
+                    localStorage.removeItem(`chat_history_${sessaoId}`);
+                    
+                    // Limpar chat
+                    chatContainer.innerHTML = '<div class="system-message">Conversa limpa. Como posso ajudá-lo hoje?</div>';
+                    
+                    // Limpar resultados
+                    resultadosDiv.innerHTML = '';
+                    
+                    // Atualizar info da sessão
+                    updateSessionInfo();
+                })
+                .catch(error => {
+                    console.error('Erro ao limpar sessão:', error);
+                });
+            }
+            
+            function updateSessionInfo() {
+                sessionInfoDiv.innerHTML = `Sessão: ${sessaoId.substring(0, 8)}... <small>(${historico.length} mensagens)</small>`;
             }
         });
     </script>
