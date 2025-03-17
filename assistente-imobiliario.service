@@ -1,0 +1,16 @@
+[Unit]
+Description=Assistente Imobiliário Nova Torres
+After=network.target docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/home/ec2-user/imob
+ExecStart=/home/ec2-user/imob/auto-start.sh
+ExecStop=/usr/bin/docker-compose down
+User=ec2-user
+Group=ec2-user
+
+[Install]
+WantedBy=multi-user.target 

@@ -2,6 +2,18 @@
 
 Este projeto consiste em um sistema completo para coletar, processar e consultar dados sobre imóveis disponíveis na Nova Torres Imobiliária. O sistema inclui um scraper para coleta de dados e um assistente virtual baseado em IA para responder perguntas sobre os imóveis.
 
+## Acesso ao Sistema em Produção
+
+O assistente imobiliário está disponível online:
+
+**URL**: [http://ec2-13-38-76-17.eu-west-3.compute.amazonaws.com:8081](http://ec2-13-38-76-17.eu-west-3.compute.amazonaws.com:8081)
+
+**Recursos disponíveis**:
+- Interface web completa do assistente
+- Busca de imóveis em tempo real
+- Visualização de detalhes com fotos
+- Interação em linguagem natural
+
 ## Componentes do Sistema
 
 ### 1. Coleta de Dados (Scraper)
