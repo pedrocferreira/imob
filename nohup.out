@@ -1,0 +1,21 @@
+INFO:     Will watch for changes in these directories: ['/home/ec2-user/imob']
+INFO:     Uvicorn running on http://0.0.0.0:8080 (Press CTRL+C to quit)
+INFO:     Started reloader process [3657180] using WatchFiles
+Usando arquivo com links de imagens...
+Carregados dados de 1111 imóveis.
+Usando modelo OpenAI: gpt-3.5-turbo-0125
+Assistente inicializado com sucesso!
+Iniciando servidor em http://0.0.0.0:8080
+INFO:     Started server process [3657193]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+Usando arquivo com links de imagens...
+Carregados dados de 1111 imóveis.
+Usando modelo OpenAI: gpt-3.5-turbo-0125
+Assistente inicializado com sucesso!
+Usando arquivo com links de imagens...
+Carregados dados de 1111 imóveis.
+Usando modelo OpenAI: gpt-3.5-turbo-0125
+Assistente inicializado com sucesso!
+INFO:     127.0.0.1:41596 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:39840 - "POST /perguntar HTTP/1.1" 500 Internal Server Error

@@ -1,0 +1,12 @@
+nohup: ignoring input
+INFO:     Will watch for changes in these directories: ['/home/ec2-user/imob']
+INFO:     Uvicorn running on http://0.0.0.0:8080 (Press CTRL+C to quit)
+INFO:     Started reloader process [3658449] using WatchFiles
+Usando arquivo com links de imagens...
+Carregados dados de 1111 imóveis.
+Usando modelo OpenAI: gpt-3.5-turbo-0125
+Assistente inicializado com sucesso!
+Iniciando servidor em http://0.0.0.0:8080
+INFO:     Started server process [3658527]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
